@@ -13,6 +13,7 @@ This chapter turns the architecture into a contributor workflow. You will classi
 - [Design the complete capability](#capability)
 - [Implement in repository order](#implementation)
 - [Preserve observable behavior](#observable)
+- [Trace one complete task](#flow-trace)
 - [Select tests](#tests)
 - [Debug by symptom](#debug)
 - [First contribution exercises](#exercises)
@@ -106,6 +107,21 @@ Ask these questions for any product-visible change:
 - Does a provider swap preserve the consumer contract?
 
 A new Session event must have a stable payload and all required readers. A new tool needs both model rendering and durable UI presentation design. A new process consumer needs cancellation and termination ownership, not only successful spawn.
+
+<a id="flow-trace"></a>
+## Trace one complete task
+
+The base profile includes `@deepseek-ai/dsh-flow-trace` as a disabled learning and diagnostic observer. Enable it for one run with the supplied patch:
+
+```sh
+pnpm dsh --profile headless --patch apps/cli/config/examples/flow-trace.overlay.yml "trace one task"
+```
+
+Read the output as three interleaved layers. `agent ... phase=...` lines show process-local loop and policy activity. `tool ... phase=...` lines show pre-dispatch policy, implementation dispatch, post-dispatch policy, and the frozen result. `session ... event=...` lines show facts after `Session.append()` committed them. Match `id`, `turn`, `step`, `call`, and `attempt` fields to follow a single path.
+
+A normal tool step can be followed in this order: inbox claim, `turn/start`, pre-step admission, `step/start`, request selection, assistant stream start/end, `tool/call`, tool pre/dispatch/post/result, Session `tool/result`, `step/end`, and either another step or `turn/end`. Some paths omit stages by design: a rejected pre-step has no step; a denied tool has no implementation dispatch; a request error may retry; cancellation may commit an interrupted assistant prefix.
+
+The trace omits prompt text, message bodies, tool arguments and output, file contents, model chunks, and error messages. Use it to locate the first divergent stage, then inspect the owning package and the persisted Session events for exact data. See the [`flow-trace` package reference](../../packages/runtime-diagnostics/flow-trace/README.md) for every line family and configuration field.
 
 <a id="tests"></a>
 ## Select tests

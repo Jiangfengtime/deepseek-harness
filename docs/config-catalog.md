@@ -863,6 +863,22 @@ export interface Config {
 
 Source: [`packages/context/file-reference-local/src/index.ts:34`](../packages/context/file-reference-local/src/index.ts)
 
+<a id="deepseek-aidsh-flow-trace"></a>
+
+## `@deepseek-ai/dsh-flow-trace`
+
+```ts config-catalog
+/** Flow-trace output options. */
+export interface Config {
+  /** Cordis log level used for every trace line. */
+  level?: 'info' | 'debug'
+  /** Log assistant chunk indexes and revisions without logging chunk content. */
+  assistantChunks?: boolean
+}
+```
+
+Source: [`packages/runtime-diagnostics/flow-trace/src/index.ts:14`](../packages/runtime-diagnostics/flow-trace/src/index.ts)
+
 <a id="deepseek-aidsh-fs-local"></a>
 
 ## `@deepseek-ai/dsh-fs-local`

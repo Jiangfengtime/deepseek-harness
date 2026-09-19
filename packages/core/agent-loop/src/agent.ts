@@ -238,6 +238,12 @@ export class ReactLoopAgent implements Agent {
     }
   }
 
+  /**
+   * Claim the input for one proposed step, assemble the current system
+   * context, and let pre-step plugins accept or reject the resulting request.
+   * A rejection stops before `step/start`, so rejected input never becomes a
+   * model request in the Session log.
+   */
   private async preStep(target: InboxTarget, position: { turn: number; step: number }): Promise<PreparedStep> {
     /* v8 ignore next -- private callers establish the running phase before proposing a step */
     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": pre-step outside running phase`)
@@ -266,7 +272,12 @@ export class ReactLoopAgent implements Agent {
     return !headerEquals(baseline, canonicalHeader({ ...baseline, tools: [...tools] }))
   }
 
-  /** Open one turn before claiming its first proposed step. */
+  /**
+   * Drive one durable turn from `turn/start` through its final `turn/end`.
+   * Each accepted step is enclosed by `step/start` and `step/end`; tool result
+   * context can enqueue another step inside the same turn, while fresh user
+   * input wakes a later turn.
+   */
   private async turn(): Promise<boolean> {
     if (this.phase.kind !== 'running') {
       this.throwError(new Error(`agent "${this.id}": turn without driver reservation`))
@@ -350,6 +361,11 @@ export class ReactLoopAgent implements Agent {
     return true
   }
 
+  /**
+   * Run the request/retry/tool cycle for one accepted step. Model output with
+   * no tool calls completes the turn; tool results become next-step context;
+   * a retry repeats only the request attempt inside this step.
+   */
   private async step(decision: Extract<PreparedStep, { kind: 'enter' }>): Promise<StepEndReason | null> {
     /* v8 ignore next -- private callers establish the running phase before executing a step */
     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": step outside running phase`)
@@ -368,6 +384,9 @@ export class ReactLoopAgent implements Agent {
           || this.requestSurfaceGeneration !== this.session.surface.contentGeneration
           || this.toolsChanged(assembly.tools),
       })
+      // Commit every model-visible input before opening the provider stream.
+      // The request can then be reconstructed from the Session even when the
+      // provider fails before yielding its first assistant chunk.
       for (const { message, intent } of commits) {
         this.session.append('system/message', { turn, step, message }, intent)
       }
@@ -386,6 +405,8 @@ export class ReactLoopAgent implements Agent {
         step,
         (frame) => { this.dispatch.emit('agent/assistant-stream', { frame }) },
       )
+      // Stream frames are live UI observations. `live.settle(...)` below is
+      // the point that turns the attempt into one durable Session event.
       let started = false
       try {
         const stream = preparedCall?.stream(request) ?? this.loopCtx.llm.stream(request)

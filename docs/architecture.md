@@ -81,6 +81,7 @@ AgentLoop awaits serial `agent/created` initialization before starting queued wo
 
 The [event map](event-producer-consumer.md) lists every event's producers and consumers.
 
+<a id="turn-flow"></a>
 ## Turn flow
 
 A **step** is one model request plus the tools it calls. A **turn** is zero or more steps: it opens before its first input is claimed and closes once nothing is owed.

@@ -68,7 +68,7 @@ Steps 1–4 are the rejection region: an error leaves the log unchanged. Step 6 
 
 The `appending` flag rejects reentrant append while observers of the current append are running. Without it, one observer could insert an event before later observers received the original event and break the shared ordering assumption.
 
-Surface-producing event types require `surfaceOp`. `sourceEventSeqs` records provenance for transformations such as tool results and replacements. Log-only events such as `turn/start`, `step/end`, and `assistant/attempt` cannot silently enter model history.
+Surface-producing event types require `surfaceOp`. `sourceEventSeqs` records the earlier event sequences used by transformations such as tool results and replacements. Log-only events such as `turn/start`, `step/end`, and `assistant/attempt` cannot silently enter model history.
 
 <a id="surface"></a>
 ## Surface planning

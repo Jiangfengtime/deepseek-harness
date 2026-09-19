@@ -13,6 +13,7 @@
 - [设计完整能力](#capability)
 - [按仓库顺序实现](#implementation)
 - [保留可观察行为](#observable)
+- [追踪一个完整任务](#flow-trace)
 - [选择测试](#tests)
 - [按症状调试](#debug)
 - [首次贡献练习](#exercises)
@@ -106,6 +107,21 @@
 - 提供者替换是否保留使用者约定？
 
 新 Session 事件必须有稳定载荷和全部必要读取者。新工具同时需要模型渲染与持久 UI 展示设计。新进程使用者需要取消与终止资源归属，而不只是成功 spawn。
+
+<a id="flow-trace"></a>
+## 追踪一个完整任务
+
+基础 profile 包含默认禁用的学习与诊断观察器 `@deepseek-ai/dsh-flow-trace`。使用提供的 patch 为一次运行启用它：
+
+```sh
+pnpm dsh --profile headless --patch apps/cli/config/examples/flow-trace.overlay.yml "trace one task"
+```
+
+把输出作为三个交错层次阅读。`agent ... phase=...` 行展示进程本地循环与策略活动。`tool ... phase=...` 行展示执行前策略、实现派发、执行后策略和冻结结果。`session ... event=...` 行展示 `Session.append()` 提交后的事实。匹配 `id`、`turn`、`step`、`call` 和 `attempt` 字段即可跟踪一条路径。
+
+普通工具 step 通常按此顺序出现：inbox claim、`turn/start`、pre-step 接纳、`step/start`、请求选择、assistant stream 开始/结束、`tool/call`、工具 pre/dispatch/post/result、Session `tool/result`、`step/end`，然后进入下一 step 或 `turn/end`。有些路径按设计省略阶段：被拒绝的 pre-step 没有 step；被拒绝的工具不派发实现；请求错误可能重试；取消可能提交被中断的 assistant 前缀。
+
+追踪省略提示词文本、消息正文、工具参数与输出、文件内容、模型 chunk 和错误消息。先用它定位第一个分歧阶段，再检查所属包和持久 Session 事件中的精确数据。每类日志与配置字段见 [`flow-trace` 包参考](../../packages/runtime-diagnostics/flow-trace/README.zh.md)。
 
 <a id="tests"></a>
 ## 选择测试

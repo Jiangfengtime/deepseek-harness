@@ -55,7 +55,7 @@ Every planned execution carries call id, name, parsed arguments, initiating Agen
 <a id="scheduler"></a>
 ## Parallel pools and exclusive barriers
 
-`runGroup()` owns four cursors: `nextToStart`, `started`, `committed`, and the `inFlight` map. The `slots` array stores completed outcomes at their original model positions; `callSeqs` stores the durable `tool/call` sequence for result provenance.
+`runGroup()` owns four cursors: `nextToStart`, `started`, `committed`, and the `inFlight` map. The `slots` array stores completed outcomes at their original model positions; `callSeqs` stores the durable `tool/call` sequence cited by each result.
 
 `fillPool()` starts work until it reaches `maxParallelToolCalls`, sees cancellation, reaches the end, or reclassifies a later call as exclusive. Before each body starts, `startCall()` appends `tool/call`, runs ordered preparation, and then either dispatches the body or stores an already-final result.
 

@@ -68,7 +68,7 @@
 
 `appending` 标志禁止在当前 append 的观察者执行期间重入追加。否则某个观察者可能在后续观察者收到原事件前插入新事件，破坏共同的顺序假设。
 
-产生 Surface 的事件类型必须提供 `surfaceOp`。`sourceEventSeqs` 为工具结果和替换等转换记录来源。`turn/start`、`step/end`、`assistant/attempt` 等仅日志事件不能悄悄进入模型历史。
+产生 Surface 的事件类型必须提供 `surfaceOp`。`sourceEventSeqs` 记录工具结果和替换等转换使用的早期事件序号。`turn/start`、`step/end`、`assistant/attempt` 等仅日志事件不能悄悄进入模型历史。
 
 <a id="surface"></a>
 ## Surface 规划

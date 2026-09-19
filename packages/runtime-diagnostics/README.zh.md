@@ -9,7 +9,7 @@ kind: "package-group"
 
 ## 概述
 
-runtime-diagnostics 组为 DeepSeek Harness 组合提供运行时自检：一个包 `invariants` 在组合运行期间运行包自有检查，验证每个包的持久化事件与数据关系。违规会以归因到拥有该关系的包的错误呈现；全局开关与包名过滤器控制运行哪些检查。当组合需要在正常运行中验证自身运行时约定时，请使用本组的包。
+runtime-diagnostics 组为运行中的 DeepSeek Harness 组合提供两个互补视角。`invariants` 运行包自有检查，验证持久事件与数据关系。`flow-trace` 按时间输出 Agent、Session、模型请求、stream 与工具阶段的可选说明，同时不记录载荷正文。使用 invariants 发现无效状态，使用 flow trace 学习或诊断一个任务如何到达当前状态。
 
 ## 目录
 
@@ -25,6 +25,7 @@ runtime-diagnostics 组为 DeepSeek Harness 组合提供运行时自检：一个
 | 包 | 职责 | ctx 键 |
 |---|---|---|
 | [`invariants`](invariants/README.zh.md) | 运行包自有运行时检查，并按所属包报告每次失败 | 注册到 `ctx.invariants` |
+| [`flow-trace`](flow-trace/README.zh.md) | 为核心执行流程输出保护正文的时序元数据 | 无；观察事件 |
 
 -----
 
@@ -34,6 +35,7 @@ runtime-diagnostics 组为 DeepSeek Harness 组合提供运行时自检：一个
 - [运行时不变式子系统](../../docs/subsystems/invariants.zh.md)——生成的服务参考：选择、installer 与配套入口约定。
 - [不变式运行时约定 Agent Note](../../.agents/notes/implemented/architecture/2026-07-19-package-invariant-runtime-contracts.zh.md)——运行时不变式可以断言什么，以及强制配套入口接线的机械门禁。
 - [包约定](../AGENTS.md)——每个包都必须遵循的 `./invariant` 配套入口规则。
+- [学习指南：扩展与调试](../../docs/learning/09-extension-and-debugging.zh.md)——启用追踪并把日志行映射到核心扩展点。
 
 -----
 

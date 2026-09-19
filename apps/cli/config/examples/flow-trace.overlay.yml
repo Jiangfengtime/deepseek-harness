@@ -1,0 +1,7 @@
+# Enable the base profile's privacy-safe chronological execution trace.
+# A patch replaces the complete config object, so keep every desired field here.
+- id: flow-trace
+  disabled: false
+  config:
+    level: info
+    assistantChunks: false

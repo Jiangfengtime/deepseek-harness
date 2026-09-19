@@ -330,6 +330,7 @@
       "@deepseek-ai/dsh-deque": ["./packages/util/deque/src"],
       "@deepseek-ai/dsh-file-reference": ["./packages/context/file-reference/src"],
       "@deepseek-ai/dsh-file-reference-local": ["./packages/context/file-reference-local/src"],
+      "@deepseek-ai/dsh-flow-trace": ["./packages/runtime-diagnostics/flow-trace/src"],
       "@deepseek-ai/dsh-fs": ["./packages/fs/fs/src"],
       "@deepseek-ai/dsh-fs/invariant": ["./packages/fs/fs/src/invariant.ts"],
       "@deepseek-ai/dsh-fs-local": ["./packages/fs/fs-local/src"],

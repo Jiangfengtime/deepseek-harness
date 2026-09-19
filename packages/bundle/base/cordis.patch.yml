@@ -74,6 +74,16 @@
     - id: agent
       name: '@deepseek-ai/dsh-agent'
 
+    # A chronological learning/debug trace for the Agent, Session, and tool
+    # pipelines. It is dormant because ordinary runs should not emit per-stage
+    # diagnostics; enable it with a profile patch when following one task.
+    - id: flow-trace
+      name: '@deepseek-ai/dsh-flow-trace'
+      disabled: true
+      config:
+        level: info
+        assistantChunks: false
+
     - id: plugin-package-inventory-deepseek
       name: '@deepseek-ai/dsh-plugin-package-inventory-deepseek'
 

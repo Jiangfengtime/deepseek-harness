@@ -55,7 +55,7 @@
 <a id="scheduler"></a>
 ## 并行池与独占屏障
 
-`runGroup()` 维护四个游标：`nextToStart`、`started`、`committed` 和 `inFlight` Map。`slots` 数组按原始模型位置保存已完成结果；`callSeqs` 保存持久 `tool/call` 序号，用于结果来源关联。
+`runGroup()` 维护四个游标：`nextToStart`、`started`、`committed` 和 `inFlight` Map。`slots` 数组按原始模型位置保存已完成结果；`callSeqs` 保存每个结果引用的持久 `tool/call` 序号。
 
 `fillPool()` 持续启动工作，直到达到 `maxParallelToolCalls`、观察到取消、到达末尾，或发现后续调用重新分类为 exclusive。每个函数体启动前，`startCall()` 先追加 `tool/call`，执行有序 preparation，再派发函数体或保存已经最终确定的结果。
 

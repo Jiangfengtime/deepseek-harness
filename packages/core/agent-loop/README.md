@@ -106,6 +106,8 @@ The loop deep-freezes each derived message identity on its first request and reu
 | [`src/constants.ts`](src/constants.ts) | `DEFAULT_MAX_PARALLEL_TOOL_CALLS` |
 | [`src/invariant.ts`](src/invariant.ts) | Invariant companion: request reconstruction from the session log |
 
+For a first source read, follow `index.ts` from construction into `createAgent()` and `prepare()`, then switch to `agent.ts` at `send()` and follow `wakeDriver()`, `turn()`, `preStep()`, and `step()`. Read `inbox.ts`, `assistant-stream.ts`, `runtime-context.ts`, and `tool-calls.ts` when their callers first appear; each helper explains the durable state or ordering rule it owns.
+
 ### Creation and teardown
 
 Creation is one rollback-covered transaction: construct a private session, concrete agent, and scoped context; await optional setup; enter both registries; announce `session/created`; await serial `agent/created` listeners; then release queued input. A caller creating a runtime child sets `options.parentAgent`; the caller Context separately owns the transaction and live handle. Setup, commit, or listener failure and owner disposal roll back the prepared resources. Announcements already delivered remain observable and receive matching disposal notifications. Teardown stops and drains the driver, unwinds the scope, closes the session's write path, detaches the agent, then detaches the session. Every detach binds the exact entered object, so a stale disposer cannot remove a later same-id replacement.

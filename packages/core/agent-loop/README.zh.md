@@ -106,6 +106,8 @@ const handle = await ctx.agents.create({
 | [`src/constants.ts`](src/constants.ts) | `DEFAULT_MAX_PARALLEL_TOOL_CALLS` |
 | [`src/invariant.ts`](src/invariant.ts) | 不变式配套：从会话日志重建请求 |
 
+第一次阅读源码时，先在 `index.ts` 中从构造函数跟到 `createAgent()` 和 `prepare()`，再切换到 `agent.ts`，从 `send()` 依次阅读 `wakeDriver()`、`turn()`、`preStep()` 与 `step()`。首次遇到调用点时再打开 `inbox.ts`、`assistant-stream.ts`、`runtime-context.ts` 和 `tool-calls.ts`；每个辅助文件都说明了自己负责的持久状态或顺序规则。
+
 ### 创建与拆除
 
 创建是同一个受回滚保护的事务：构造私有会话、具象 agent 与带作用域上下文；等待可选 setup；进入两个注册表；宣告 `session/created`；等待串行 `agent/created` 监听器；随后释放已排队输入。创建运行时子 Agent 的调用方设置 `options.parentAgent`；调用方 Context 则单独拥有事务和存活句柄。Setup、commit、监听器失败或所有者 dispose 都会回滚已准备的资源。已送达的宣告仍可被观察，并有配对的销毁通知。Teardown 停止并排空驱动器、撤销作用域、关闭会话写路径、detach agent，再 detach 会话。每次 detach 都绑定到确切进入的对象，因此陈旧 disposer 无法移除之后出现的同 id 替代项。

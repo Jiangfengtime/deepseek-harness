@@ -1,4 +1,11 @@
-/** Process-local assistant attempt framing and durable stream accumulation. */
+/**
+ * 把一个 provider 流转换为 Agent 消费者需要的两种表示。
+ *
+ * 实时 `agent/assistant-stream` frame 让 UI 可以立即渲染 chunk，但进程退出后
+ * 这些 frame 就会消失。保存在 `assistant/message` 或 `assistant/attempt` 中的
+ * 紧凑计时流是持久数据，可用于回放。本类让每个 chunk 只处理一次并同时进入
+ * 两种表示；只有对应 Session 事件提交成功后，才发送实时终止 frame。
+ */
 
 import {
   AssistantStreamAccumulator,
@@ -14,25 +21,32 @@ import {
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEventMap, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 
-/** Folds one model attempt into one compact stream plus ordered transient frames. */
+/**
+ * 把一次模型 attempt 折叠为组装后的内容、紧凑回放流与有序临时 frame。每个
+ * 实例只代表一次 provider attempt；请求重试会在同一 step 内创建新实例。
+ */
 export class AssistantStreamAttempt {
+  /** 最终嵌入持久事件的无损紧凑记录。 */
   private readonly accumulator = new AssistantStreamAccumulator()
+  /** 从同一批 chunk 派生的语义内容、usage 与 finish 状态。 */
   private readonly assembler = new BlockAssembler()
+  /** 临时 frame 中使用的从零开始的 chunk 下标。 */
   private index = 0
+  /** 防止调用方发布第二个终止 frame。 */
   private terminal = false
-  /** Attempt identity unique within this Agent lifecycle. */
+  /** 在当前 Agent 生命周期内唯一的 attempt 标识。 */
   readonly attemptId: LlmAttemptId
 
-  /** Whether this started attempt has emitted its terminal frame. */
+  /** 已开始的 attempt 是否已经发出终止 frame。 */
   get ended(): boolean { return this.terminal }
 
   /**
-   * @param sessionId - identity embedded only in the Agent-lifecycle-local attempt id.
-   * @param attempt - attached-Session-local attempt counter.
-   * @param nextRevision - allocates the next emitted frame revision.
-   * @param turn - durable turn owning the request.
-   * @param step - durable step owning the request.
-   * @param emit - agent-scoped notification publisher.
+   * @param sessionId - 只嵌入 Agent 生命周期本地 attempt id 的 Session 标识。
+   * @param attempt - 当前挂接 Session 内的 attempt 计数。
+   * @param nextRevision - 分配下一个 frame 修订号。
+   * @param turn - 拥有本次请求的持久 turn。
+   * @param step - 拥有本次请求的持久 step。
+   * @param emit - Agent scope 内的通知发布函数。
    */
   constructor(
     sessionId: SessionId,
@@ -45,7 +59,10 @@ export class AssistantStreamAttempt {
     this.attemptId = LlmAttemptId(`${sessionId}:${attempt}`)
   }
 
-  /** Publish the opening marker before the first delivered chunk. */
+  /**
+   * 在首个 chunk 交付前发布开始标记。驱动器只会在请求构建完成并通过最后一次
+   * 取消检查后调用它，因此 setup 失败不会产生虚假的实时 attempt。
+   */
   start(): void {
     this.emit({
       type: 'start',
@@ -56,7 +73,10 @@ export class AssistantStreamAttempt {
     })
   }
 
-  /** Snapshot one chunk once, then feed durable compaction, assembly, and live publication. */
+  /**
+   * 只为一个 chunk 生成一次快照，再依次送入持久压缩、语义组装与实时发布。
+   * 持久记录中的时间戳与实时 frame 暴露的时间戳完全相同。
+   */
   push(chunk: StreamChunk): void {
     const timed = this.accumulator.push({ time: Date.now(), chunk })
     this.assembler.push(timed.chunk)
@@ -71,9 +91,10 @@ export class AssistantStreamAttempt {
   }
 
   /**
-   * Publish terminal settlement after the matching durable event commits.
-   * @param eventType - durable settlement type.
-   * @param append - synchronous durable append returning its committed seq.
+   * 先提交匹配的持久事件，再发布实时终止结算。若 append 失败，`abandon()` 会
+   * 告知实时观察者不存在可回放事件；原始 append 错误仍继续抛给驱动器。
+   * @param eventType - 持久结算事件类型。
+   * @param append - 同步追加持久事件并返回已提交 seq 的函数。
    */
   settle(
     eventType: 'assistant/message' | 'assistant/attempt',
@@ -96,7 +117,10 @@ export class AssistantStreamAttempt {
     })
   }
 
-  /** Publish abandonment when no durable attempt event can be committed. */
+  /**
+   * 无法提交持久 attempt 事件时发布 abandoned。abandoned end frame 没有
+   * Session seq，不能在回放时当作已完成的 assistant attempt。
+   */
   abandon(): void {
     this.terminal = true
     this.emit({
@@ -108,32 +132,35 @@ export class AssistantStreamAttempt {
     })
   }
 
-  /** Exact compact stream for the final durable event. */
+  /** 写入最终持久事件的精确紧凑流；调用方得到数组副本。 */
   get stream(): SessionEventMap['assistant/attempt']['stream'] {
     return [...this.accumulator.snapshot()] as AssistantStreamRecord[]
   }
 
-  /** Canonical completed-message blocks from the same chunks. */
+  /** 从同一批 chunk 组装出的规范 completed-message block。 */
   blocks(): ContentBlock[] {
     return this.assembler.blocks()
   }
 
-  /** Safe visible prefix when cancellation interrupts the attempt. */
+  /**
+   * attempt 被取消打断时可安全保留的可见前缀。不完整的协议 block 会被排除，
+   * 避免后续模型收到残缺 tool call 或尚未组装完成的结构化内容。
+   */
   interruptedBlocks(): ContentBlock[] {
     return this.assembler.interruptedBlocks()
   }
 
-  /** Latest adapter-reported usage in the stream. */
+  /** 流中 adapter 最后一次报告的 token usage。 */
   get usage(): TokenUsage | undefined {
     return this.assembler.usage
   }
 
-  /** Terminal reason, defaulting to stop when the stream omitted one. */
+  /** 终止原因；若流未给出，则默认按 stop 处理。 */
   get finish(): FinishReason {
     return this.assembler.finish
   }
 
-  /** Replay state carried by the terminal finish record. */
+  /** 终止 finish 记录携带的回放状态。 */
   get replayState(): ReplayEnvelope | undefined {
     return this.assembler.replayState
   }

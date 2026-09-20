@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-flow-trace` explains one running task as chronological Cordis log lines. It observes Agent lifecycle and policy waterfalls, committed Session events, assistant stream boundaries, and tool execution stages. The base profile mounts it disabled; enable it only while learning or diagnosing a flow. Trace lines contain correlation ids, turn and step numbers, event types, decisions, provider/model names, and failure codes. They deliberately omit prompts, message content, tool arguments, tool output, file contents, model text, and error messages.
+`dsh-flow-trace` explains one running task as chronological Cordis log lines. It observes Agent lifecycle and policy waterfalls, final model-stream dispatch, committed Session events, assistant stream boundaries, and tool execution stages. The base profile mounts it disabled; enable it only while learning or diagnosing a flow. Trace lines contain correlation ids, turn and step numbers, event types, decisions, provider/model names, chunk counts, terminal outcomes, and failure codes. They deliberately omit prompts, message content, tool arguments, tool output, file contents, model text, and error messages.
 
 ## Table of Contents
 
@@ -58,7 +58,9 @@ Follow the shared ids and counters rather than treating every line as an indepen
 agent id=<session> phase=inbox-claimed message=<message> turn=1
 session id=<session> seq=3 event=step/start turn=1 step=1
 agent id=<session> phase=request-exit turn=1 step=1 provider=... model=...
+llm session=<session> phase=stream-enter provider=... model=... messages=... tools=...
 agent id=<session> stream phase=start attempt=... revision=1 turn=1 step=1
+llm session=<session> phase=stream-exit provider=... model=... chunks=... outcome=stop
 session id=<session> seq=7 event=tool/call turn=1 step=1 call=... tool=read_file
 tool call=... name=read_file phase=pre-exit decision=allow
 tool call=... name=read_file phase=result error=false concludesTurn=false
@@ -66,14 +68,14 @@ session id=<session> seq=8 event=tool/result turn=1 step=1 call=... error=false
 session id=<session> seq=10 event=turn/end turn=1 reason=completed
 ```
 
-`phase=*-enter` and `phase=*-exit` surround a waterfall extension point. The exit line shows the value selected after all downstream policies ran. `session ... event=...` is different: `session/event` fires after `Session.append()` commits, so that line names a durable fact available to replay and persistence observers. Stream lines are process-local and explain activity between durable settlements.
+`phase=*-enter` and `phase=*-exit` surround a waterfall extension point. The exit line shows the value selected after all downstream policies ran. The `llm` pair encloses final model dispatch and reports only request counts, delivered chunk count, and the terminal finish kind; `consumer-stopped` means the caller stopped iteration before adapter EOF. `session ... event=...` is different: `session/event` fires after `Session.append()` commits, so that line names a durable fact available to replay and persistence observers. Stream lines are process-local and explain activity between durable settlements.
 
 Tool execution has four useful views. `pre-*` reports allow/deny/ask/cancel policy; `dispatch-*` surrounds the selected implementation; `post-*` reports result policy; `phase=result` is the frozen final outcome. The later Session `tool/result` line confirms that AgentLoop committed the model-facing result.
 
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 
-The plugin registers global observers because it is mounted at the profile root and must see every Agent scope. Each waterfall observer calls `next()`, awaits it, logs the selected decision or result, and returns the same value. That delegation is required for transparency: skipping `next()` would make the diagnostic plugin a policy owner and could block a step, model request, or tool call.
+The plugin registers global observers because it is mounted at the profile root and must see every Agent scope. Decision waterfalls call `next()`, await it, log the selected decision or result, and return the same value. The `llm/stream` observer wraps and forwards the delegated async iterable, logging its exit from a `finally` block so normal EOF, a terminal finish record, a thrown error class, and early consumer cancellation remain distinguishable. Delegation is required for transparency: skipping `next()` would make the diagnostic plugin a policy owner and could block a step, model request, or tool call.
 
 The Session observer runs on the post-commit `session/event` feed. Its event switch adds only safe routing metadata for a small set of core events; unknown plugin-owned events still receive the common session id, sequence, type, turn, and step fields when present. The trace never serializes an event, message, execution object, stream chunk, result, or thrown value. Error logs retain only stable codes or class names.
 

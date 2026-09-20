@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-flow-trace` 把一个运行中任务解释为按时间排列的 Cordis 日志。它观察 Agent 生命周期与策略 waterfall、已提交的 Session 事件、assistant 流边界和工具执行阶段。基础 profile 默认挂载但禁用它；只在学习或诊断流程时启用。日志包含关联 id、turn 与 step 编号、事件类型、决策、provider/model 名称和失败代码。它有意省略提示词、消息正文、工具参数、工具输出、文件内容、模型文本和错误消息。
+`dsh-flow-trace` 把一个运行中任务解释为按时间排列的 Cordis 日志。它观察 Agent 生命周期与策略 waterfall、最终模型流分发、已提交的 Session 事件、assistant 流边界和工具执行阶段。基础 profile 默认挂载但禁用它；只在学习或诊断流程时启用。日志包含关联 id、turn 与 step 编号、事件类型、决策、provider/model 名称、chunk 数量、终止结果和失败代码。它有意省略提示词、消息正文、工具参数、工具输出、文件内容、模型文本和错误消息。
 
 ## 目录
 
@@ -58,7 +58,9 @@ pnpm dsh --profile headless --patch apps/cli/config/examples/flow-trace.overlay.
 agent id=<session> phase=inbox-claimed message=<message> turn=1
 session id=<session> seq=3 event=step/start turn=1 step=1
 agent id=<session> phase=request-exit turn=1 step=1 provider=... model=...
+llm session=<session> phase=stream-enter provider=... model=... messages=... tools=...
 agent id=<session> stream phase=start attempt=... revision=1 turn=1 step=1
+llm session=<session> phase=stream-exit provider=... model=... chunks=... outcome=stop
 session id=<session> seq=7 event=tool/call turn=1 step=1 call=... tool=read_file
 tool call=... name=read_file phase=pre-exit decision=allow
 tool call=... name=read_file phase=result error=false concludesTurn=false
@@ -66,14 +68,14 @@ session id=<session> seq=8 event=tool/result turn=1 step=1 call=... error=false
 session id=<session> seq=10 event=turn/end turn=1 reason=completed
 ```
 
-`phase=*-enter` 与 `phase=*-exit` 包围一个 waterfall 扩展点。Exit 行展示所有下游策略运行后选定的值。`session ... event=...` 含义不同：`session/event` 在 `Session.append()` 提交后触发，因此该行表示可供回放和持久化观察器读取的持久事实。Stream 行是进程本地信息，解释两次持久结算之间的活动。
+`phase=*-enter` 与 `phase=*-exit` 包围一个 waterfall 扩展点。Exit 行展示所有下游策略运行后选定的值。`llm` 日志对包围最终模型分发，并且只报告请求数量、已交付的 chunk 数量和终止 finish 类型；`consumer-stopped` 表示调用方在 adapter 到达 EOF 前停止迭代。`session ... event=...` 含义不同：`session/event` 在 `Session.append()` 提交后触发，因此该行表示可供回放和持久化观察器读取的持久事实。Stream 行是进程本地信息，解释两次持久结算之间的活动。
 
 工具执行有四个有用视角。`pre-*` 报告 allow/deny/ask/cancel 策略；`dispatch-*` 包围选定实现；`post-*` 报告结果策略；`phase=result` 是冻结后的最终结果。之后的 Session `tool/result` 行确认 AgentLoop 已提交面向模型的结果。
 
 <a id="understand-the-implementation"></a>
 ## 理解实现
 
-插件注册全局观察器，因为它挂载在 profile 根部并且需要观察每个 Agent scope。每个 waterfall 观察器都调用并等待 `next()`、记录选定决策或结果，然后返回同一个值。这种委派是透明观察的必要条件：省略 `next()` 会让诊断插件成为策略所有者，并可能阻止 step、模型请求或工具调用。
+插件注册全局观察器，因为它挂载在 profile 根部并且需要观察每个 Agent scope。决策 waterfall 会调用并等待 `next()`、记录选定决策或结果，然后返回同一个值。`llm/stream` 观察器包装并转发下游异步可迭代对象，在 `finally` 块中记录退出，使正常 EOF、终止 finish 记录、抛出的错误类和调用方提前取消能够区分。这种委派是透明观察的必要条件：省略 `next()` 会让诊断插件成为策略所有者，并可能阻止 step、模型请求或工具调用。
 
 Session 观察器运行在提交后的 `session/event` feed 上。它的事件 switch 只为少量核心事件增加安全的路由元数据；未知的插件自有事件仍会获得通用 session id、seq、type，以及存在时的 turn 和 step 字段。追踪从不序列化事件、消息、执行对象、stream chunk、结果或抛出值。错误日志只保留稳定代码或类名。
 

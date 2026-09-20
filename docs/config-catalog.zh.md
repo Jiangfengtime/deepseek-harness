@@ -879,7 +879,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/runtime-diagnostics/flow-trace/src/index.ts:14`](../packages/runtime-diagnostics/flow-trace/src/index.ts)
+来源：[`packages/runtime-diagnostics/flow-trace/src/index.ts:15`](../packages/runtime-diagnostics/flow-trace/src/index.ts)
 
 <a id="deepseek-aidsh-fs-local"></a>
 

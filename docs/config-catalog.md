@@ -877,7 +877,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/runtime-diagnostics/flow-trace/src/index.ts:14`](../packages/runtime-diagnostics/flow-trace/src/index.ts)
+Source: [`packages/runtime-diagnostics/flow-trace/src/index.ts:15`](../packages/runtime-diagnostics/flow-trace/src/index.ts)
 
 <a id="deepseek-aidsh-fs-local"></a>
 

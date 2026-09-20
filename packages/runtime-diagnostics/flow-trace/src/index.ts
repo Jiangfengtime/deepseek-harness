@@ -7,6 +7,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { AssistantStreamFrame, PreStepDecision, RequestErrorAction } from '@deepseek-ai/dsh-agent'
+import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, PreToolDecision, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 
@@ -84,6 +85,41 @@ function assistantFrame(frame: AssistantStreamFrame): string {
 }
 
 /**
+ * Wrap the final model stream without retaining request or response content.
+ * The exit line is emitted from `finally`, so early consumer cancellation is
+ * distinguishable from adapter EOF and terminal finish records.
+ */
+async function* observeLlmStream(
+  options: GenerateOptions,
+  next: () => AsyncIterable<StreamChunk>,
+  trace: Trace,
+): AsyncIterable<StreamChunk> {
+  const session = options.sessionId ?? '-'
+  trace(`llm session=${session} phase=stream-enter provider=${options.provider} model=${options.model} messages=${options.messages.length} tools=${options.tools?.length ?? 0}`)
+  let chunks = 0
+  let terminal: StreamChunk & { type: 'finish' } | undefined
+  let reachedEof = false
+  let thrown: unknown
+  try {
+    for await (const chunk of next()) {
+      chunks += 1
+      if (chunk.type === 'finish') terminal = chunk
+      yield chunk
+    }
+    reachedEof = true
+  } catch (error: unknown) {
+    thrown = error
+    throw error
+  } finally {
+    const outcome = terminal?.reason.kind
+      ?? (thrown !== undefined
+        ? `threw:${thrown instanceof Error ? thrown.name : 'UnknownError'}`
+        : reachedEof ? 'eof' : 'consumer-stopped')
+    trace(`llm session=${session} phase=stream-exit provider=${options.provider} model=${options.model} chunks=${chunks} outcome=${outcome}`)
+  }
+}
+
+/**
  * Install privacy-safe observers around the main execution flow.
  *
  * Waterfall listeners always delegate and return the downstream value. The
@@ -146,6 +182,9 @@ export function apply(ctx: Context, config: Config): void {
     trace(`agent id=${payload.agent.id} phase=request-error-exit turn=${payload.turn} step=${payload.step} action=${requestErrorDecision(action)}`)
     return action
   }, { global: true })
+
+  ctx.on('llm/stream', (options, next): AsyncIterable<StreamChunk> =>
+    observeLlmStream(options, next, trace), { global: true })
 
   ctx.on('agent/assistant-stream', ({ agent, frame }) => {
     if (frame.type === 'chunk' && config.assistantChunks !== true) return

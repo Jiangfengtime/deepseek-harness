@@ -1,3 +1,15 @@
+"""Threaded newline-delimited JSON-RPC transport for the Python SDK.
+
+The caller thread writes requests and blocks on a per-request queue. One daemon
+thread is the sole stdout reader and dispatches decoded envelopes; another
+drains stderr into a bounded diagnostic tail. Locks protect only shared maps
+and writes, so user callbacks never execute while the transport lock is held.
+
+Debug logs deliberately contain routing metadata only. Protocol params,
+results, error messages, stderr text, prompts, and tool content remain outside
+the logging path.
+"""
+
 from __future__ import annotations
 
 import json
@@ -28,15 +40,15 @@ logger = logging.getLogger(__name__)
 class HarnessConfig:
     """Configuration for launching the local DeepSeek Harness SDK runtime."""
 
-    dsh_bin: str | None = None
-    profile: str = "sdk"
-    patches: tuple[str, ...] = ()
-    dsh_home: str | None = None
-    cwd: str | None = None
-    env: dict[str, str] | None = None
-    initialize_timeout_seconds: float = 30.0
-    request_timeout_seconds: float | None = None
-    shutdown_timeout_seconds: float | None = 1.0
+    dsh_bin: str | None = None  # Alternate executable; None resolves the bundled carrier.
+    profile: str = "sdk"  # dsh profile containing the JSON-RPC server composition.
+    patches: tuple[str, ...] = ()  # Ordered absolute-or-resolvable profile overlays.
+    dsh_home: str | None = None  # Required explicit runtime state root.
+    cwd: str | None = None  # Child process working directory.
+    env: dict[str, str] | None = None  # Values merged over the inherited environment.
+    initialize_timeout_seconds: float = 30.0  # Startup handshake bound.
+    request_timeout_seconds: float | None = None  # Default ordinary-call bound.
+    shutdown_timeout_seconds: float | None = 1.0  # Graceful shutdown and wait bound.
 
 
 class HarnessClient:
@@ -54,18 +66,32 @@ class HarnessClient:
         *,
         _launch_args: tuple[str, ...] | None = None,
     ) -> None:
+        """Create transport state; :meth:`start` performs process creation.
+
+        ``_launch_args`` is a test-only seam for fake JSON-RPC peers. Public
+        callers select a bundled or explicit ``dsh`` executable through the
+        configuration so production launches keep the supported profile path.
+        """
         self.config = config or HarnessConfig()
         self._launch_args = _launch_args
         self._proc: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
+        # Each outbound request owns a size-one response queue. The reader
+        # removes the map entry exactly once before delivering its outcome.
         self._responses: dict[str, queue.Queue[JsonValue | BaseException]] = {}
+        # Unclaimed notifications preserve the low-level polling API, while
+        # subscriptions provide isolated queues for high-level Session runs.
         self._notifications: queue.Queue[Notification | BaseException] = queue.Queue()
         self._notification_subscribers: dict[
             str, tuple[queue.Queue[Notification | BaseException], NotificationFilter | None]
         ] = {}
+        # Parent edges discovered from subagent notifications let a root
+        # subscription follow descendants without inspecting message content.
         self._session_parents: dict[str, str] = {}
         self._requests: queue.Queue[IncomingRequest | BaseException] = queue.Queue()
+        # Bounded retention prevents an unhealthy child from growing SDK memory
+        # without limit while still preserving useful failure context.
         self._stderr_lines: deque[str] = deque(maxlen=400)
         self._reader_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
@@ -78,6 +104,7 @@ class HarnessClient:
         self.close()
 
     def start(self) -> None:
+        """Spawn the configured runtime and start both drain threads."""
         if self._proc is not None:
             logger.debug("runtime start skipped state=running")
             return
@@ -92,6 +119,8 @@ class HarnessClient:
             self.config.profile,
             len(self.config.patches),
         )
+        # Text mode plus line buffering matches the runtime's NDJSON framing:
+        # one stdout line is one complete JSON-RPC envelope.
         self._proc = subprocess.Popen(
             args,
             stdin=subprocess.PIPE,
@@ -158,6 +187,7 @@ class HarnessClient:
         reasoning_effort: str | None = None,
         max_tokens: int | None = None,
     ) -> InitializeResponse:
+        """Validate the selected profile and establish the root model route."""
         payload: JsonObject = {
             "cwd": str(Path(cwd).resolve()),
             "provider": provider,
@@ -196,6 +226,7 @@ class HarnessClient:
         on_notification: Callable[[Notification], None] | None = None,
         notification_subscription: "NotificationSubscription | None" = None,
     ) -> str:
+        """Queue content for a Session and return its assigned inbox message id."""
         payload: JsonObject = {"sessionId": session_id, "contentBlocks": content_blocks}
         response = self.request(
             "session/prompt",
@@ -218,6 +249,7 @@ class HarnessClient:
         notification_filter: NotificationFilter | None = None,
         notification_subscription: "NotificationSubscription | None" = None,
     ) -> ModelT:
+        """Send one request and validate its object result with ``response_model``."""
         result = self._request_raw(
             method,
             params,
@@ -231,6 +263,7 @@ class HarnessClient:
         return response_model.model_validate(result)
 
     def notify(self, method: str, params: JsonObject | None = None) -> None:
+        """Send a JSON-RPC notification that expects no response."""
         message: JsonObject = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             message["params"] = params
@@ -238,6 +271,7 @@ class HarnessClient:
         self._write_message(message)
 
     def next_notification(self) -> Notification:
+        """Block for the next notification not claimed by any subscription."""
         item = self._notifications.get()
         if isinstance(item, BaseException):
             raise item
@@ -247,6 +281,7 @@ class HarnessClient:
         self,
         notification_filter: NotificationFilter | None = None,
     ) -> "NotificationSubscription":
+        """Register an independent ordered notification queue."""
         subscription_id = str(uuid.uuid4())
         notifications: queue.Queue[Notification | BaseException] = queue.Queue()
         with self._lock:
@@ -258,12 +293,14 @@ class HarnessClient:
         return self.subscribe_notifications(self._notification_belongs_to_session_tree(session_id))
 
     def next_request(self) -> IncomingRequest:
+        """Block for the next server-to-client JSON-RPC request."""
         item = self._requests.get()
         if isinstance(item, BaseException):
             raise item
         return item
 
     def respond(self, request_id: str | int, result: JsonValue) -> None:
+        """Return a successful result for a server-to-client request."""
         self._write_message({"jsonrpc": "2.0", "id": request_id, "result": result})
 
     def respond_error(
@@ -274,6 +311,7 @@ class HarnessClient:
         message: str,
         data: JsonValue | None = None,
     ) -> None:
+        """Return a structured error for a server-to-client request."""
         error: JsonObject = {"code": code, "message": message}
         if data is not None:
             error["data"] = data
@@ -289,6 +327,13 @@ class HarnessClient:
         notification_filter: NotificationFilter | None = None,
         notification_subscription: "NotificationSubscription | None" = None,
     ) -> JsonValue:
+        """Correlate one request with its response while draining callbacks.
+
+        When ``on_notification`` is supplied, short queue waits periodically
+        drain its subscription on the caller thread. This preserves callback
+        ordering and prevents the stdout reader from running user code. Without
+        a callback, the caller blocks directly on its response queue.
+        """
         request_id = str(uuid.uuid4())
         waiter: queue.Queue[JsonValue | BaseException] = queue.Queue(maxsize=1)
         temp_subscription: NotificationSubscription | None = None
@@ -312,6 +357,8 @@ class HarnessClient:
             if temp_subscription is not None:
                 temp_subscription.close()
             raise
+        # Use an absolute monotonic deadline. Repeated notification wakeups do
+        # not extend the caller's configured request budget.
         timeout = self.config.request_timeout_seconds if timeout_seconds is None else timeout_seconds
         deadline = None if timeout is None else time.monotonic() + timeout
         try:
@@ -360,11 +407,14 @@ class HarnessClient:
         return item
 
     def _write_message(self, message: JsonObject) -> None:
+        """Serialize and flush one complete envelope without interleaved writers."""
         proc = self._proc
         if proc is None or proc.stdin is None:
             raise TransportClosedError("DeepSeek Harness runtime is not running")
         try:
             payload = json.dumps(message, separators=(",", ":")) + "\n"
+            # Multiple caller threads may issue requests concurrently. Holding
+            # the lock across write and flush keeps each NDJSON frame atomic.
             with self._write_lock:
                 proc.stdin.write(payload)
                 proc.stdin.flush()
@@ -402,6 +452,7 @@ class HarnessClient:
             self._fail_waiters(self._runtime_closed_error("DeepSeek Harness runtime stdout closed"))
 
     def _stderr_loop(self) -> None:
+        """Continuously drain stderr so a verbose child cannot block on its pipe."""
         proc = self._proc
         if proc is None or proc.stderr is None:
             return
@@ -416,11 +467,15 @@ class HarnessClient:
         msg_id = message.get("id")
         method = message.get("method")
         if isinstance(msg_id, (str, int)) and isinstance(method, str):
+            # An envelope with both id and method is a request initiated by the
+            # runtime. The embedding application owns its eventual response.
             params = message.get("params")
             logger.debug("rpc incoming request id=%s method=%s", msg_id, method)
             self._requests.put(IncomingRequest(id=msg_id, method=method, payload=params if isinstance(params, dict) else {}))
             return
         if isinstance(msg_id, (str, int)):
+            # Responses have an id but no method. Pop-before-delivery guarantees
+            # duplicate responses cannot complete the same waiter twice.
             with self._lock:
                 waiter = self._responses.pop(str(msg_id), None)
             if waiter is None:
@@ -435,6 +490,9 @@ class HarnessClient:
                 waiter.put(message.get("result"))
             return
         if isinstance(method, str):
+            # Notifications have a method but no id. Relationship discovery
+            # happens under the same lock as the subscriber snapshot, so a
+            # child-start edge is visible to immediately following events.
             params = message.get("params")
             notification = Notification(method=method, payload=params if isinstance(params, dict) else {})
             logger.debug(
@@ -464,6 +522,7 @@ class HarnessClient:
                 self._notifications.put(notification)
 
     def _fail_waiters(self, exc: BaseException) -> None:
+        """Wake every blocking API when the shared transport can no longer progress."""
         logger.debug("rpc waiters failing error=%s", type(exc).__name__)
         with self._lock:
             waiters = list(self._responses.values())
@@ -503,6 +562,7 @@ class HarnessClient:
         return "\n".join(parts)
 
     def _default_launch_args(self, env: dict[str, str]) -> tuple[str, ...]:
+        """Resolve the supported dsh launch command and explicit Harness home."""
         if self.config.dsh_bin is None:
             try:
                 from deepseek_harness_runtime import resolve_bundled_launch_args
@@ -584,6 +644,7 @@ class HarnessClient:
 
 
 class NotificationSubscription:
+    """Owned queue registration removed deterministically on close."""
     def __init__(
         self,
         client: HarnessClient,
@@ -602,18 +663,21 @@ class NotificationSubscription:
         self.close()
 
     def close(self) -> None:
+        """Stop future delivery; already queued notifications remain readable."""
         if self._closed:
             return
         self._closed = True
         self._client._unsubscribe_notifications(self._subscription_id)
 
     def next(self) -> Notification:
+        """Block for the next matching notification or transport failure."""
         item = self._notifications.get()
         if isinstance(item, BaseException):
             raise item
         return item
 
     def drain(self, on_notification: Callable[[Notification], None]) -> None:
+        """Deliver every currently queued notification on the caller thread."""
         while True:
             try:
                 item = self._notifications.get_nowait()
@@ -637,11 +701,13 @@ def _int_or_none(value: object) -> int | None:
 
 
 def _string_field(value: JsonObject, key: str) -> str:
+    """Read a string metadata field for logging without coercing payload data."""
     candidate = value.get(key)
     return candidate if isinstance(candidate, str) else "-"
 
 
 def _notification_event_type(notification: Notification) -> str:
+    """Extract only the Session event type used by privacy-safe diagnostics."""
     event = notification.payload.get("event")
     if not isinstance(event, dict):
         return "-"

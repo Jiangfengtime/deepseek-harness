@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import email
 import json
+import logging
 import os
 import re
 import shutil
@@ -14,6 +15,9 @@ import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +65,13 @@ def office_sidecar_name(executable_name: str) -> str:
 
 
 def main() -> None:
+    """Build, inspect, and print the path of one release wheel.
+
+    SDK and runtime wheels intentionally take different staging paths. The SDK
+    stays platform independent and pins the matching runtime distribution. A
+    runtime wheel embeds one already-built executable and its platform
+    sidecars, so callers must select the matching manifest entry explicitly.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", choices=("sdk", "runtime"), required=True)
     parser.add_argument(
@@ -82,6 +93,12 @@ def main() -> None:
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    logger.debug(
+        "python release build starting package=%s version=%s platform=%s",
+        args.package,
+        wheel_version,
+        args.platform or "any",
+    )
     with tempfile.TemporaryDirectory(prefix="dsh-python-release-") as temporary:
         staging = Path(temporary) / args.package
         if args.package == "sdk":
@@ -94,14 +111,17 @@ def main() -> None:
             environment = {"DSH_RUNTIME_PLATFORM_TAG": platform_tag}
             expected = output_dir / f"deepseek_harness_runtime_bin-{wheel_version}-py3-none-{platform_tag}.whl"
         command = ["uv", "build", "--wheel", "--out-dir", str(output_dir), str(staging)]
+        logger.debug("python release staging complete package=%s", args.package)
         subprocess.run(command, cwd=ROOT, env=None if environment is None else {**os.environ, **environment}, check=True)
     if not expected.is_file():
         raise RuntimeError(f"build did not produce expected wheel: {expected}")
     verify_wheel(expected, args.package, wheel_version, None if args.platform is None else PLATFORMS[args.platform])
+    logger.debug("python release wheel verified package=%s path=%s", args.package, expected)
     print(expected)
 
 
 def repository_version(root: Path = ROOT) -> str:
+    """Read the shared repository version accepted by the Python release flow."""
     package_json = root / "package.json"
     try:
         payload = json.loads(package_json.read_text())
@@ -138,6 +158,7 @@ def pep440_version(version: str) -> str:
 
 
 def validate_release_tag(tag: str | None, version: str) -> None:
+    """Require an optional Python release tag to name the repository version."""
     if tag is None:
         return
     expected = f"python-v{version}"
@@ -148,6 +169,7 @@ def validate_release_tag(tag: str | None, version: str) -> None:
 
 
 def copy_package(source: Path, destination: Path) -> None:
+    """Copy package sources while excluding local and generated build state."""
     shutil.copytree(
         source,
         destination,
@@ -164,6 +186,7 @@ def copy_package(source: Path, destination: Path) -> None:
 
 
 def rewrite_version(pyproject: Path, version: str) -> None:
+    """Replace the single staged project version or reject an unexpected file."""
     text, count = re.subn(
         r'^version = "[^"]+"$',
         f'version = "{version}"',
@@ -197,6 +220,7 @@ def stage_license_files(destination: Path, *, include_notices: bool) -> None:
 
 
 def stage_sdk(destination: Path, version: str) -> None:
+    """Stage the pure-Python SDK with an exact dependency on its runtime wheel."""
     copy_package(ROOT / "python" / "sdk", destination)
     stage_license_files(destination, include_notices=False)
     pyproject = destination / "pyproject.toml"
@@ -213,6 +237,7 @@ def stage_sdk(destination: Path, version: str) -> None:
 
 
 def stage_runtime(destination: Path, version: str, executable: Path, executable_name: str) -> None:
+    """Stage one native runtime and every sidecar required on its platform."""
     if executable.name != executable_name:
         raise ValueError(
             f"runtime executable must be named {executable_name}, got {executable.name}"
@@ -271,6 +296,7 @@ def verify_wheel(
     version: str,
     platform: tuple[str, str] | None,
 ) -> None:
+    """Reject a wheel whose metadata or embedded payload differs from the release manifest."""
     expected_tag = "py3-none-any" if platform is None else f"py3-none-{platform[0]}"
     with zipfile.ZipFile(wheel) as archive:
         wheel_metadata_path = next(name for name in archive.namelist() if name.endswith(".dist-info/WHEEL"))

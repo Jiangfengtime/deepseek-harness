@@ -97,6 +97,7 @@ def validate_deployment_targets(
 
 
 def main() -> None:
+    """Compare every supplied Mach-O target with the selected wheel claim."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=tuple(MACOS_PLATFORMS), required=True)
     parser.add_argument("executables", type=Path, nargs="+")

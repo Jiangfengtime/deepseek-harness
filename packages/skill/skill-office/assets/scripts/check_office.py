@@ -83,6 +83,7 @@ def relationship_target(part: str, target: str) -> str:
 
 
 def relationships(part: str, xml: dict[str, ET.Element], types: set[str] | None = None) -> dict[str, str]:
+    """Resolve internal relationships from one OOXML part, optionally by role."""
     path = posixpath.join(posixpath.dirname(part), "_rels", posixpath.basename(part) + ".rels")
     root = xml.get(path)
     if root is None:
@@ -104,6 +105,7 @@ def related_xml(part: str, reference: str, links: dict[str, str], xml: dict[str,
 
 
 def inspect_docx(xml: dict[str, ET.Element]) -> tuple[dict, str]:
+    """Summarize Word layout metadata and referenced user-visible text."""
     part = "word/document.xml"
     root = xml[part]
     w = namespace(root, W_NAMESPACES, part)
@@ -149,6 +151,7 @@ def inspect_docx(xml: dict[str, ET.Element]) -> tuple[dict, str]:
 
 
 def inspect_pptx(xml: dict[str, ET.Element]) -> tuple[dict, str]:
+    """Summarize slides and text reached from the presentation's slide list."""
     part = "ppt/presentation.xml"
     links = relationships(part, xml)
     root = xml[part]
@@ -164,6 +167,7 @@ def inspect_pptx(xml: dict[str, ET.Element]) -> tuple[dict, str]:
 
 
 def inspect_xlsx(xml: dict[str, ET.Element]) -> tuple[dict, str]:
+    """Summarize worksheets, formula presence, and stored user-visible text."""
     part = "xl/workbook.xml"
     links = relationships(part, xml)
     root = xml[part]
@@ -235,6 +239,7 @@ def inspect(path: Path) -> tuple[dict, str]:
 
 
 def main() -> int:
+    """Validate one OOXML package and emit a machine-readable report."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path)
     parser.add_argument("--out", type=Path)

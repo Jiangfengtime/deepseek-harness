@@ -690,7 +690,10 @@ def assert_advertised_tool(body: dict[str, object], expected: str) -> None:
 
 
 class MockModel:
+    """Own a loopback OpenAI-compatible endpoint for deterministic smoke runs."""
+
     def __enter__(self) -> "MockModel":
+        """Start the server and expose its base URL to runtime scenarios."""
         MockModelHandler.requests.clear()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), MockModelHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -700,12 +703,14 @@ class MockModel:
         return self
 
     def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        """Stop accepting requests and join the server thread before returning."""
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
 
 
 def main() -> None:
+    """Validate arguments, run the selected packaged-runtime scenarios, and report progress."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--scenario",
@@ -1024,6 +1029,7 @@ def safe_turn_end(value: object) -> object:
 
 
 def smoke_sdk_default(base_url: str) -> None:
+    """Run the installed SDK against its default bundled runtime selection."""
     from deepseek_harness import DeepSeekHarness
 
     with tempfile.TemporaryDirectory(prefix="dsh-sdk-default-") as temporary:
@@ -1053,6 +1059,7 @@ def smoke_sdk_default(base_url: str) -> None:
 
 
 def smoke_sdk_custom(base_url: str, executable: Path) -> None:
+    """Run text, PTC, and workflow turns through an explicitly selected runtime."""
     from deepseek_harness import DeepSeekHarness
 
     with tempfile.TemporaryDirectory(prefix="dsh-sdk-custom-") as temporary:
@@ -1493,6 +1500,7 @@ def smoke_sdk_restart_snapshot(base_url: str, executable: Path, update_snapshots
 
 
 def smoke_direct(base_url: str, executable: Path) -> None:
+    """Drive the executable's JSON-RPC transport without the Python SDK wrapper."""
     with tempfile.TemporaryDirectory(prefix="dsh-direct-") as temporary:
         root = Path(temporary).resolve()
         dsh_home = root / "home"
@@ -1642,7 +1650,15 @@ def is_idle_notification(message: dict[str, object]) -> bool:
 
 
 class RuntimePeer:
+    """Own a line-framed runtime process used by the direct protocol scenario.
+
+    Dedicated reader threads continuously drain both output pipes. This keeps
+    a verbose child from blocking and lets ``read_until`` enforce one deadline
+    while preserving all JSON-RPC messages observed before its predicate.
+    """
+
     def __init__(self, argv: list[str], cwd: Path, environment: dict[str, str]) -> None:
+        """Spawn the runtime with piped UTF-8 protocol and diagnostic streams."""
         self.process = subprocess.Popen(
             argv,
             cwd=cwd,
@@ -1660,12 +1676,14 @@ class RuntimePeer:
         threading.Thread(target=self._read_stderr, daemon=True).start()
 
     def send(self, message: dict[str, object]) -> None:
+        """Write and flush one JSON-RPC line to the child."""
         if self.process.stdin is None:
             raise RuntimeError("runtime stdin is unavailable")
         self.process.stdin.write(json.dumps(message) + "\n")
         self.process.stdin.flush()
 
     def read_until(self, predicate: Callable[[dict[str, object]], bool]) -> list[dict[str, object]]:
+        """Return all decoded messages through the first predicate match."""
         deadline = time.monotonic() + 60
         messages: list[dict[str, object]] = []
         while time.monotonic() < deadline:
@@ -1685,6 +1703,7 @@ class RuntimePeer:
         raise TimeoutError(f"runtime timed out; messages={messages}; stderr={''.join(self.stderr)}")
 
     def close(self) -> None:
+        """Close stdin, bound graceful exit, and reject unexpected status codes."""
         if self.process.stdin is not None and not self.process.stdin.closed:
             self.process.stdin.close()
         try:
@@ -1696,12 +1715,14 @@ class RuntimePeer:
             raise RuntimeError(f"runtime exited {self.process.returncode}; stderr: {''.join(self.stderr)}")
 
     def _read_stdout(self) -> None:
+        """Forward protocol lines to the synchronized consumer queue until EOF."""
         assert self.process.stdout is not None
         for line in self.process.stdout:
             self.stdout.put(line)
         self.stdout.put(None)
 
     def _read_stderr(self) -> None:
+        """Drain and retain diagnostics without mixing them into protocol data."""
         assert self.process.stderr is not None
         self.stderr.extend(self.process.stderr)
 
@@ -1820,6 +1841,7 @@ def selected_snapshot_session_files(directory: Path) -> dict[int, Path]:
 
 
 def assert_session_log(sessions: Path, cwd: Path, *expected_texts: str) -> None:
+    """Check the selected Session generation for canonical cwd and expected output."""
     logs = latest_persisted_session_paths(sessions)
     if len(logs) != 1:
         raise AssertionError(f"expected one JSONL session log under {sessions}, found {logs}")
@@ -1836,6 +1858,7 @@ def assert_session_log(sessions: Path, cwd: Path, *expected_texts: str) -> None:
 
 
 def assert_zstd_session_log(sessions: Path) -> None:
+    """Require exactly one selected compressed Session with Zstandard framing."""
     logs = latest_persisted_session_paths(sessions, compressed=True)
     if len(logs) != 1:
         raise AssertionError(f"expected one Zstandard JSONL session log under {sessions}, found {logs}")

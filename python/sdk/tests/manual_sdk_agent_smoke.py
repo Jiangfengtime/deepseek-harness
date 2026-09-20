@@ -19,9 +19,12 @@ from deepseek_harness import DeepSeekHarness
 
 
 class MockCompletionHandler(BaseHTTPRequestHandler):
+    """Capture one provider request and return a minimal valid SSE completion."""
+
     requests: list[dict[str, Any]] = []
 
     def do_POST(self) -> None:
+        """Record request metadata and stream a successful assistant response."""
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(length).decode("utf-8")
         self.requests.append({
@@ -38,10 +41,12 @@ class MockCompletionHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"data: [DONE]\n\n")
 
     def log_message(self, _format: str, *_args: object) -> None:
+        """Suppress the HTTP server's unrelated access log during the smoke run."""
         return
 
 
 def run_smoke(repo_root: Path, keep_sessions: bool) -> None:
+    """Run one source-launched SDK turn and inspect its provider and Session output."""
     dsh_home = Path(tempfile.mkdtemp(prefix="dsh-sdk-smoke-home-"))
     session_root = dsh_home / "sessions"
     runtime_entry = repo_root / "apps/cli/src/bin.ts"
@@ -107,6 +112,7 @@ def run_smoke(repo_root: Path, keep_sessions: bool) -> None:
 
 
 def main() -> None:
+    """Resolve the checkout and run the manual SDK integration scenario."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--repo-root",

@@ -123,14 +123,17 @@ class DeepSeekHarness:
         self._initialized = False
 
     def __enter__(self) -> "DeepSeekHarness":
+        """Initialize the owned runtime and return this reusable SDK handle."""
         self.start()
         return self
 
     def __exit__(self, _exc_type, _exc, _tb) -> None:
+        """Reap the runtime on normal and exceptional context-manager exits."""
         self.close()
 
     @property
     def client(self) -> HarnessClient:
+        """Expose the initialized transport owner for lower-level RPC access."""
         return self._client
 
     def start(self) -> None:
@@ -189,6 +192,7 @@ class Session:
     """
 
     def __init__(self, harness: DeepSeekHarness, session_id: str) -> None:
+        """Bind a durable Session id to its parent runtime owner."""
         self.harness = harness
         self.id = session_id
 
@@ -212,6 +216,7 @@ class Session:
         logger.debug("session run starting session=%s blocks=%d", self.id, len(content_blocks))
 
         def collect(notification: Notification) -> None:
+            """Retain wire order while projecting only root events into the result."""
             # The callback observes the same ordered objects retained in the
             # result. Root Session events receive a second projection because
             # final_response and finish_reason must exclude descendant events.

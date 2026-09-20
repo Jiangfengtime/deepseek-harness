@@ -97,10 +97,12 @@ class HarnessClient:
         self._stderr_thread: threading.Thread | None = None
 
     def __enter__(self) -> "HarnessClient":
+        """Start the transport process and return this client."""
         self.start()
         return self
 
     def __exit__(self, _exc_type, _exc, _tb) -> None:
+        """Close the transport even when the caller leaves with an exception."""
         self.close()
 
     def start(self) -> None:
@@ -422,10 +424,12 @@ class HarnessClient:
             raise self._runtime_closed_error("Failed to write to DeepSeek Harness runtime") from exc
 
     def _start_reader_thread(self) -> None:
+        """Start the sole stdout reader that owns JSON-RPC frame decoding."""
         self._reader_thread = threading.Thread(target=self._reader_loop, name="dsh-runtime-reader", daemon=True)
         self._reader_thread.start()
 
     def _start_stderr_thread(self) -> None:
+        """Drain stderr so the child cannot block and retain a diagnostic tail."""
         self._stderr_thread = threading.Thread(target=self._stderr_loop, name="dsh-runtime-stderr", daemon=True)
         self._stderr_thread.start()
 
@@ -537,6 +541,7 @@ class HarnessClient:
         self._requests.put(exc)
 
     def _runtime_closed_error(self, reason: str) -> TransportClosedError:
+        """Attach available child exit and stderr facts to a transport failure."""
         diagnostics = self._runtime_diagnostics()
         return TransportClosedError(f"{reason}\n{diagnostics}" if diagnostics else reason)
 
@@ -593,10 +598,12 @@ class HarnessClient:
         return (*base, "--profile", self.config.profile, *patches)
 
     def _unsubscribe_notifications(self, subscription_id: str) -> None:
+        """Remove one owned subscriber without affecting the global queue."""
         with self._lock:
             self._notification_subscribers.pop(subscription_id, None)
 
     def _record_session_relationship_locked(self, notification: Notification) -> None:
+        """Retain discovered child ancestry for later descendant filtering."""
         if notification.method != "subagent.started":
             return
         parent_id = notification.payload.get("parentSessionId")
@@ -611,6 +618,7 @@ class HarnessClient:
             self._session_parents[child_id] = parent_id
 
     def _notification_belongs_to_session_tree(self, session_id: str) -> NotificationFilter:
+        """Build a predicate that follows the selected Session and known descendants."""
         def belongs(notification: Notification) -> bool:
             payload = notification.payload
             if notification.method in {"subagent.started", "subagent.finished"}:
@@ -630,6 +638,7 @@ class HarnessClient:
         return belongs
 
     def _session_is_descendant_of(self, session_id: str, root_session_id: str) -> bool:
+        """Walk recorded parent links without looping on malformed ancestry."""
         current = session_id
         visited: set[str] = set()
         while current not in visited:
@@ -689,14 +698,19 @@ class NotificationSubscription:
 
 
 class _SessionPromptResponse(BaseModel):
+    """Validated result fields returned after a prompt enters the runtime inbox."""
+
     messageId: str
 
 
 class _ShutdownResponse(BaseModel):
+    """Validated empty result returned by a graceful runtime shutdown."""
+
     pass
 
 
 def _int_or_none(value: object) -> int | None:
+    """Read an optional JSON-RPC integer without coercing booleans or strings."""
     return value if isinstance(value, int) else None
 
 

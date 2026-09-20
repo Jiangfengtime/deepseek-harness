@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import logging
 import sys
 import threading
 import time
@@ -13,7 +14,11 @@ from deepseek_harness import DeepSeekHarness, HarnessClient, HarnessConfig, Noti
 from deepseek_harness.errors import JsonRpcError
 
 
-def test_high_level_sdk_runs_turn_and_preserves_auto_review_errors(tmp_path: Path) -> None:
+def test_high_level_sdk_runs_turn_and_preserves_auto_review_errors(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="deepseek_harness")
     script = tmp_path / "fake_runtime.py"
     env_dump = tmp_path / "env.json"
     init_dump = tmp_path / "init.json"
@@ -215,6 +220,19 @@ for line in sys.stdin:
         "reasoningEffort": "max",
         "maxTokens": 4096,
     }
+    sdk_logs = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name.startswith("deepseek_harness")
+    )
+    assert "harness initialized" in sdk_logs
+    assert "rpc request completed" in sdk_logs
+    assert "session event accepted session=main event=assistant/message" in sdk_logs
+    assert "session run completed session=main" in sdk_logs
+    assert "say hello" not in sdk_logs
+    assert "env-key" not in sdk_logs
+    assert "git push --force" not in sdk_logs
+    assert "hello from runtime" not in sdk_logs
 
 
 def test_session_run_invokes_notification_callback_before_returning(tmp_path: Path) -> None:

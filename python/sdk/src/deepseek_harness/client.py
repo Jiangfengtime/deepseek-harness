@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import subprocess
@@ -20,6 +21,8 @@ from .models import IncomingRequest, InitializeResponse, JsonObject, JsonValue, 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 NotificationFilter: TypeAlias = Callable[[Notification], bool]
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(slots=True)
 class HarnessConfig:
@@ -37,7 +40,13 @@ class HarnessConfig:
 
 
 class HarnessClient:
-    """Synchronous JSON-RPC client for the DeepSeek Harness SDK runtime over stdio."""
+    """Synchronous JSON-RPC client for the Harness runtime over stdio.
+
+    One reader thread owns stdout and routes each JSON-RPC envelope to its
+    request waiter, notification subscribers, or incoming-request queue. A
+    separate stderr thread retains diagnostics without mixing them into the
+    protocol stream.
+    """
 
     def __init__(
         self,
@@ -70,6 +79,7 @@ class HarnessClient:
 
     def start(self) -> None:
         if self._proc is not None:
+            logger.debug("runtime start skipped state=running")
             return
         with self._lock:
             self._session_parents.clear()
@@ -77,6 +87,11 @@ class HarnessClient:
         if self.config.env:
             env.update(self.config.env)
         args = list(self._launch_args or self._default_launch_args(env))
+        logger.debug(
+            "runtime starting profile=%s patches=%d",
+            self.config.profile,
+            len(self.config.patches),
+        )
         self._proc = subprocess.Popen(
             args,
             stdin=subprocess.PIPE,
@@ -90,12 +105,15 @@ class HarnessClient:
         )
         self._start_reader_thread()
         self._start_stderr_thread()
+        logger.debug("runtime started pid=%d", self._proc.pid)
 
     def close(self) -> None:
         """Close the runtime after a bounded opportunity to flush durable state."""
         proc = self._proc
         if proc is None:
+            logger.debug("runtime close skipped state=closed")
             return
+        logger.debug("runtime closing pid=%d", proc.pid)
         shutdown_completed = False
         try:
             self.request("shutdown", None, response_model=_ShutdownResponse, timeout_seconds=self.config.shutdown_timeout_seconds)
@@ -129,6 +147,7 @@ class HarnessClient:
             self._reader_thread.join(timeout=0.5)
         if self._stderr_thread and self._stderr_thread.is_alive():
             self._stderr_thread.join(timeout=0.5)
+        logger.debug("runtime closed pid=%d exit_code=%s", proc.pid, proc.returncode)
 
     def initialize(
         self,
@@ -215,6 +234,7 @@ class HarnessClient:
         message: JsonObject = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             message["params"] = params
+        logger.debug("rpc notification sending method=%s", method)
         self._write_message(message)
 
     def next_notification(self) -> Notification:
@@ -273,6 +293,8 @@ class HarnessClient:
         waiter: queue.Queue[JsonValue | BaseException] = queue.Queue(maxsize=1)
         temp_subscription: NotificationSubscription | None = None
         subscription = notification_subscription
+        # Register before writing: the runtime may answer before this thread
+        # returns from the flush, and the reader must already find the waiter.
         with self._lock:
             self._responses[request_id] = waiter
         if on_notification is not None and subscription is None:
@@ -282,6 +304,7 @@ class HarnessClient:
             message: JsonObject = {"jsonrpc": "2.0", "id": request_id, "method": method}
             if params is not None:
                 message["params"] = params
+            logger.debug("rpc request sending id=%s method=%s", request_id, method)
             self._write_message(message)
         except BaseException:
             with self._lock:
@@ -326,7 +349,14 @@ class HarnessClient:
             if temp_subscription is not None:
                 temp_subscription.close()
         if isinstance(item, BaseException):
+            logger.debug(
+                "rpc request failed id=%s method=%s error=%s",
+                request_id,
+                method,
+                type(item).__name__,
+            )
             raise item
+        logger.debug("rpc request completed id=%s method=%s", request_id, method)
         return item
 
     def _write_message(self, message: JsonObject) -> None:
@@ -350,6 +380,7 @@ class HarnessClient:
         self._stderr_thread.start()
 
     def _reader_loop(self) -> None:
+        """Own stdout reads and hand complete JSON-RPC envelopes to the router."""
         proc = self._proc
         if proc is None or proc.stdout is None:
             return
@@ -360,11 +391,14 @@ class HarnessClient:
                 try:
                     message = json.loads(line)
                 except json.JSONDecodeError:
+                    logger.debug("rpc input ignored reason=invalid-json")
                     continue
                 self._handle_message(message)
         except BaseException as exc:
+            logger.debug("rpc reader failed error=%s", type(exc).__name__)
             self._fail_waiters(exc)
         finally:
+            logger.debug("rpc reader stopped")
             self._fail_waiters(self._runtime_closed_error("DeepSeek Harness runtime stdout closed"))
 
     def _stderr_loop(self) -> None:
@@ -375,28 +409,40 @@ class HarnessClient:
             self._stderr_lines.append(line.rstrip())
 
     def _handle_message(self, message: object) -> None:
+        """Route one decoded envelope without logging its payload or content."""
         if not isinstance(message, dict):
+            logger.debug("rpc input ignored reason=non-object")
             return
         msg_id = message.get("id")
         method = message.get("method")
         if isinstance(msg_id, (str, int)) and isinstance(method, str):
             params = message.get("params")
+            logger.debug("rpc incoming request id=%s method=%s", msg_id, method)
             self._requests.put(IncomingRequest(id=msg_id, method=method, payload=params if isinstance(params, dict) else {}))
             return
         if isinstance(msg_id, (str, int)):
             with self._lock:
                 waiter = self._responses.pop(str(msg_id), None)
             if waiter is None:
+                logger.debug("rpc response ignored id=%s reason=no-waiter", msg_id)
                 return
             if isinstance(message.get("error"), dict):
                 err = message["error"]
+                logger.debug("rpc response received id=%s outcome=error code=%s", msg_id, _int_or_none(err.get("code")))
                 waiter.put(JsonRpcError(_int_or_none(err.get("code")), str(err.get("message", "JSON-RPC error")), err.get("data")))
             else:
+                logger.debug("rpc response received id=%s outcome=success", msg_id)
                 waiter.put(message.get("result"))
             return
         if isinstance(method, str):
             params = message.get("params")
             notification = Notification(method=method, payload=params if isinstance(params, dict) else {})
+            logger.debug(
+                "rpc notification received method=%s session=%s event=%s",
+                method,
+                _string_field(notification.payload, "sessionId"),
+                _notification_event_type(notification),
+            )
             with self._lock:
                 self._record_session_relationship_locked(notification)
                 subscribers = list(self._notification_subscribers.items())
@@ -418,6 +464,7 @@ class HarnessClient:
                 self._notifications.put(notification)
 
     def _fail_waiters(self, exc: BaseException) -> None:
+        logger.debug("rpc waiters failing error=%s", type(exc).__name__)
         with self._lock:
             waiters = list(self._responses.values())
             self._responses.clear()
@@ -587,3 +634,16 @@ class _ShutdownResponse(BaseModel):
 
 def _int_or_none(value: object) -> int | None:
     return value if isinstance(value, int) else None
+
+
+def _string_field(value: JsonObject, key: str) -> str:
+    candidate = value.get(key)
+    return candidate if isinstance(candidate, str) else "-"
+
+
+def _notification_event_type(notification: Notification) -> str:
+    event = notification.payload.get("event")
+    if not isinstance(event, dict):
+        return "-"
+    event_type = event.get("type")
+    return event_type if isinstance(event_type, str) else "-"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Callable
 from .client import HarnessClient, HarnessConfig
 from .errors import SdkProtocolError
 from .models import JsonObject, Notification
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -102,7 +105,14 @@ class DeepSeekHarness:
 
     def start(self) -> None:
         if self._initialized:
+            logger.debug("harness start skipped state=initialized")
             return
+        logger.debug(
+            "harness initializing profile=%s provider=%s model=%s",
+            self.config.profile,
+            self.config.provider,
+            self.config.model,
+        )
         self._client.start()
         self._client.initialize(
             cwd=self._cwd,
@@ -112,10 +122,13 @@ class DeepSeekHarness:
             max_tokens=self.config.max_tokens,
         )
         self._initialized = True
+        logger.debug("harness initialized")
 
     def close(self) -> None:
+        logger.debug("harness closing")
         self._client.close()
         self._initialized = False
+        logger.debug("harness closed")
 
     def start_session(self, session_id: str | None = None) -> "Session":
         self.start()
@@ -132,6 +145,8 @@ class DeepSeekHarness:
 
 
 class Session:
+    """One durable Harness conversation addressed by a stable session id."""
+
     def __init__(self, harness: DeepSeekHarness, session_id: str) -> None:
         self.harness = harness
         self.id = session_id
@@ -142,9 +157,11 @@ class Session:
         *,
         on_notification: Callable[[Notification], None] | None = None,
     ) -> RunResult:
+        """Run one activity interval from inbox receipt through agent idle."""
         content_blocks = normalize_input(input)
         notifications: list[Notification] = []
         events: list[JsonObject] = []
+        logger.debug("session run starting session=%s blocks=%d", self.id, len(content_blocks))
 
         def collect(notification: Notification) -> None:
             notifications.append(notification)
@@ -157,6 +174,11 @@ class Session:
                 event = notification.payload.get("event")
                 if isinstance(event, dict):
                     events.append(event)
+                    logger.debug(
+                        "session event accepted session=%s event=%s",
+                        self.id,
+                        _event_type(event),
+                    )
 
         with self.harness.client.subscribe_session_notifications(self.id) as subscription:
             message_id = self.harness.client.session_prompt(
@@ -164,7 +186,11 @@ class Session:
                 content_blocks,
                 notification_subscription=subscription,
             )
+            logger.debug("session prompt queued session=%s message=%s", self.id, message_id)
 
+            # Notifications that preceded the matching durable inbox receipt
+            # belong to earlier activity on a reused session and stay outside
+            # this run's result interval.
             received = False
             while True:
                 notification = subscription.next()
@@ -172,21 +198,31 @@ class Session:
                     if not _is_inbox_receipt(notification, self.id, message_id):
                         continue
                     received = True
+                    logger.debug("session prompt received session=%s message=%s", self.id, message_id)
                 collect(notification)
                 if (
                     notification.method == "session.status"
                     and notification.payload.get("sessionId") == self.id
                     and notification.payload.get("status") == "idle"
                 ):
+                    logger.debug("session idle observed session=%s", self.id)
                     break
 
-        return RunResult(
+        result = RunResult(
             session_id=self.id,
             final_response=final_response(events),
             finish_reason=finish_reason(events),
             events=events,
             notifications=notifications,
         )
+        logger.debug(
+            "session run completed session=%s events=%d notifications=%d reason=%s",
+            self.id,
+            len(events),
+            len(notifications),
+            result.finish_reason or "-",
+        )
+        return result
 
 
 def _is_inbox_receipt(notification: Notification, session_id: str, message_id: str) -> bool:
@@ -246,3 +282,8 @@ def finish_reason(events: list[JsonObject]) -> str | None:
             raise SdkProtocolError("turn/end event requires a string data.reason.kind")
         return kind
     return None
+
+
+def _event_type(event: JsonObject) -> str:
+    event_type = event.get("type")
+    return event_type if isinstance(event_type, str) else "-"

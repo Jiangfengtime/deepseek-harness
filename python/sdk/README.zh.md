@@ -32,6 +32,19 @@ print(result.final_response)
 
 `DeepSeekHarness` 延迟启动运行时，并在调用 `close()` 或退出上下文管理器前复用该进程。首次 profile 握手通过 `initialize_timeout_seconds` 使用独立的 30 秒默认上限；普通轮次在未设置 `request_timeout_seconds` 时仍不设上限。超时诊断会指明所选 profile，并包含保留的运行时诊断。`cwd` 是 agent workspace；`runtime_cwd` 独立选择子进程工作目录。两者都会在启动前转成绝对路径。`provider`、`model`、可选的 `reasoning_effort` 和可选的正整数 `max_tokens` 通过 JSON-RPC 初始化发送。`base_url` 与 `api_key` 会显式覆盖子进程环境中的 `DEEPSEEK_BASE_URL` 与 `DEEPSEEK_API_KEY`。
 
+## 观察执行流程
+
+SDK 通过 Python 标准的 `deepseek_harness` logger 层级输出可选的 `DEBUG` 记录。记录会标识运行时启动与关闭、JSON-RPC 请求关联、通知路由、Session 事件类型、收件确认以及最终 idle 边界。记录不会包含请求参数、提示词文本、工具参数、模型输出、错误消息或凭据。
+
+```py
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("deepseek_harness").setLevel(logging.DEBUG)
+```
+
+高层生命周期记录来自 `deepseek_harness.api`，传输层记录来自 `deepseek_harness.client`。只需要其中一种视图时，可以分别配置这两个子 logger。运行时侧的 Agent 与工具阶段仍可通过仓库运行时诊断文档介绍的 `flow-trace` Cordis patch 观察。
+
 ## 自定义插件
 
 持久自定义属于 `dsh` profile。使用运行时 wheel 包提供的 `dsh` 命令初始化随附的 SDK profile，并安装外部 bundle：

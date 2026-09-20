@@ -32,6 +32,19 @@ print(result.final_response)
 
 `DeepSeekHarness` starts lazily and reuses its runtime until `close()` or context-manager exit. The initial profile handshake has an independent 30-second default bound through `initialize_timeout_seconds`; ordinary turns remain unbounded unless `request_timeout_seconds` is set. A timeout names the selected profile and includes retained runtime diagnostics. `cwd` is the agent workspace; `runtime_cwd` independently selects the subprocess working directory. Both become absolute before launch. `provider`, `model`, optional `reasoning_effort`, and optional positive `max_tokens` are sent during JSON-RPC initialization. `base_url` and `api_key` explicitly override `DEEPSEEK_BASE_URL` and `DEEPSEEK_API_KEY` in the child environment.
 
+## Observe execution
+
+The SDK emits opt-in `DEBUG` records through Python's standard `deepseek_harness` logger hierarchy. Records identify runtime startup and shutdown, JSON-RPC request correlation, notification routing, Session event types, inbox receipt, and the final idle boundary. They omit request parameters, prompt text, tool arguments, model output, error messages, and credentials.
+
+```py
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("deepseek_harness").setLevel(logging.DEBUG)
+```
+
+The high-level lifecycle records come from `deepseek_harness.api`; transport records come from `deepseek_harness.client`. Configure those child loggers separately when only one view is needed. Runtime-side Agent and tool stages remain available through the `flow-trace` Cordis patch described in the repository's runtime diagnostics documentation.
+
 ## Customize plugins
 
 Persistent customization belongs to a `dsh` profile. Initialize the shipped SDK profile and install an external bundle with the runtime wheel's `dsh` command:

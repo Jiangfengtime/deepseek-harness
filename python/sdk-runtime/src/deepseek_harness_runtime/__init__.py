@@ -22,12 +22,15 @@ console command requires ``DSH_HOME`` for the same reason.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 PACKAGE_METADATA_FILENAME = "deepseek-harness-runtime.json"
 
@@ -51,6 +54,7 @@ def bundled_package_dir() -> Path:
     metadata = root / PACKAGE_METADATA_FILENAME
     if not metadata.is_file():
         raise FileNotFoundError(f"deepseek-harness-runtime-bin is missing {metadata}")
+    logger.debug("runtime package located metadata=present")
     return root
 
 
@@ -65,6 +69,7 @@ def bundled_runtime_path() -> Path:
     touching callers).
     """
     tag = _current_platform_tag()
+    logger.debug("runtime executable resolving platform=%s", tag)
     extension = ".exe" if tag.startswith("win-") else ""
     path = bundled_package_dir() / "runtime" / f"deepseek-harness-sdk-runtime-{tag}{extension}"
     if not path.is_file():
@@ -104,6 +109,7 @@ def bundled_runtime_path() -> Path:
             f"deepseek-harness-runtime-bin is missing the Office sidecar engine {engine} at {office}. "
             + _EXE_ACQUISITION_HINT
         )
+    logger.debug("runtime executable verified platform=%s office_engine=%s", tag, engine)
     return path
 
 
@@ -121,8 +127,10 @@ def resolve_bundled_launch_args(mode: str | None = None) -> tuple[str, ...]:
     """
     selected = mode if mode is not None else os.environ.get(RUNTIME_MODE_ENV_VAR)
     if selected is None or selected == "exe":
+        logger.debug("runtime carrier selected mode=exe source=%s", "argument" if mode is not None else "default")
         return (str(bundled_runtime_path()),)
     if selected == "node":
+        logger.debug("runtime carrier selected mode=node source=%s", "argument" if mode is not None else "environment")
         return _node_launch_args()
     raise ValueError(
         f"unsupported DeepSeek Harness runtime mode {selected!r}: expected 'exe' or 'node' "
@@ -131,6 +139,7 @@ def resolve_bundled_launch_args(mode: str | None = None) -> tuple[str, ...]:
 
 
 def _current_platform_tag() -> str:
+    """Map Python's host identifiers to one published runtime payload tag."""
     plat = _PLATFORM_TAGS.get(sys.platform)
     arch = _ARCH_TAGS.get(platform.machine().lower())
     if (
@@ -143,10 +152,13 @@ def _current_platform_tag() -> str:
             f"(sys.platform={sys.platform!r}, machine={platform.machine()!r}); supported: "
             "Linux x64/arm64, macOS x64/arm64, and Windows x64. " + _EXE_ACQUISITION_HINT
         )
-    return f"{plat}-{arch}"
+    tag = f"{plat}-{arch}"
+    logger.debug("runtime platform resolved tag=%s", tag)
+    return tag
 
 
 def _node_launch_args() -> tuple[str, str]:
+    """Resolve the explicit source-checkout Node carrier and its CLI module."""
     node_root = bundled_package_dir() / "runtime" / "node"
     bin_js = (
         node_root
@@ -169,6 +181,7 @@ def _node_launch_args() -> tuple[str, str]:
             "the node runtime mode needs a system `node` (>=22.19) on PATH; "
             "install Node.js or use the exe mode"
         )
+    logger.debug("runtime node carrier verified")
     return (node, str(bin_js))
 
 
@@ -184,7 +197,11 @@ def main() -> None:
     argv = (*resolve_bundled_launch_args(), *sys.argv[1:])
     if sys.platform == "win32":
         # Windows CRT exec does not replace the process; wait and preserve the runtime status.
+        logger.debug("runtime console launching strategy=wait platform=win32")
         raise SystemExit(subprocess.run(argv, env=os.environ).returncode)
+    # Do not log argv: it can contain the user's task. The carrier and strategy
+    # are enough to diagnose resolution without copying prompt text into logs.
+    logger.debug("runtime console launching strategy=exec platform=%s", sys.platform)
     os.execvpe(argv[0], argv, os.environ)
 
 

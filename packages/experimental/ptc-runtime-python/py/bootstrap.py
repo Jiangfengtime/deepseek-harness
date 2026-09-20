@@ -964,6 +964,23 @@ def _clamped(which: int, soft: int, hard: int) -> tuple[int, int]:
 
 
 async def _run(channel: ProtocolChannel) -> None:
+    """Execute one complete boot/run/settle exchange on fd 3.
+
+    The sequence is deliberately one-shot:
+
+    1. Read ``boot`` and apply CPU, address-space, and output budgets before
+       model code can run.
+    2. Install binding namespace proxies and acknowledge readiness.
+    3. Read ``run``, compile the program inside an async function, and execute
+       it while a background task correlates binding replies.
+    4. Validate and encode the returned value or classify the exception, flush
+       bounded stdout/stderr capture, then send exactly one terminal ``done``.
+
+    This child does not use Python's logging module. stdout and stderr belong to
+    the model program, while fd 3 accepts only the protocol vocabulary mirrored
+    by ``protocol.py``. Runtime diagnostics therefore surface through the host's
+    tool/Session events rather than an unframed child-side log channel.
+    """
     # The exception class every `except` clause in this function catches is bound
     # into a LOCAL at the very top, before any model code runs. This bootstrap IS
     # `__main__`, so `__main__.BaseException = RuntimeError` would otherwise
@@ -2559,6 +2576,7 @@ def _done_with_value(
 
 
 def main() -> None:
+    """Bind the inherited protocol descriptor and run the one-shot worker."""
     channel = ProtocolChannel(PROTOCOL_FD)
     asyncio.run(_run(channel))
 

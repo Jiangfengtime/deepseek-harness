@@ -25,6 +25,8 @@ Both carriers execute the same `dsh` grammar and shipped profiles, including the
 
 Unsupported platforms and missing executables or sidecars raise `FileNotFoundError` with the build and installation routes. Unknown runtime modes raise `ValueError`.
 
+Runtime-carrier resolution emits optional `DEBUG` records through the standard `deepseek_harness_runtime` logger. The records identify platform mapping, carrier choice, sidecar verification, and the POSIX/Windows launch strategy. They never include forwarded CLI arguments because those arguments may contain a user task. Applications that call the module API can enable the logger through Python's normal `logging` configuration; the installed `dsh` command remains quiet by default.
+
 ## Packaged profile resolution
 
 `dsh` initializes shipped profiles under the explicit home, composes their bundle patches, and loads bundled plugins from the executable's virtual filesystem. Because operating-system symlinks cannot enter that filesystem, packaged launches maintain small real ESM proxy packages under `$DSH_HOME/profiles/node_modules`. Each proxy mirrors explicit runtime exports, records the original package identity, and re-exports the virtual module URL. Built-in rows and external plugin peers therefore share one Cordis/module instance. Native shared libraries and Windows ConPTY addons are packaged with native addons, while ripgrep and the macOS PTY helper remain executable sidecars.

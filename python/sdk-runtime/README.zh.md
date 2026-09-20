@@ -25,6 +25,8 @@ wheel 包会安装 `dsh` 控制台命令和 `deepseek_harness_runtime` Python �
 
 不支持的平台以及缺失的可执行程序或伴随文件会抛出 `FileNotFoundError`，并指出构建与安装路径。未知运行时模式会抛出 `ValueError`。
 
+运行时载体解析通过标准 `deepseek_harness_runtime` logger 输出可选的 `DEBUG` 记录。记录会标识平台映射、载体选择、伴随文件校验以及 POSIX／Windows 启动策略。记录不会包含转发的 CLI 参数，因为这些参数可能包含用户任务。调用模块 API 的应用可以通过 Python 常规 `logging` 配置启用该 logger；安装的 `dsh` 命令默认保持安静。
+
 ## 打包后的 profile 解析
 
 `dsh` 在显式指定的主目录下初始化随附 profile、组合其 bundle patch，并从可执行程序的虚拟文件系统加载内置插件。操作系统符号链接无法进入该文件系统，因此打包运行会在 `$DSH_HOME/profiles/node_modules` 下维护小型真实 ESM 代理包。每个代理复现运行时的显式导出项、记录原包身份，并重新导出虚拟模块 URL。因此，内置配置项与外部插件 peer 会共享同一个 Cordis／模块实例。原生共享库与 Windows ConPTY addon 会同其他原生 addon 一起打包；ripgrep 与 macOS PTY helper 仍是可执行伴随程序。

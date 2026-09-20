@@ -110,6 +110,8 @@ ChildToHost = Union[BootAckMessage, CallMessage, LogMessage, DoneMessage]
 
 
 class ReplyOk(TypedDict):
+    """Host → child: successful result for one earlier binding call id."""
+
     type: Literal["reply"]
     id: int
     ok: Literal[True]
@@ -117,12 +119,16 @@ class ReplyOk(TypedDict):
 
 
 class ReplyErr(TypedDict):
+    """Host → child: rejected binding call with a program-visible message."""
+
     type: Literal["reply"]
     id: int
     ok: Literal[False]
     message: str
 
 
+# A discriminated reply keeps the child from treating an error message as a
+# successful value. The call id is the sole correlation key for pending Futures.
 ReplyMessage = Union[ReplyOk, ReplyErr]
 # The host sends ``boot`` and ``run`` before any ``reply``, so the child-facing
 # inbound union covers all three, not replies alone.

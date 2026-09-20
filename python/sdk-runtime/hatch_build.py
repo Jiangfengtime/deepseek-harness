@@ -1,12 +1,22 @@
+"""Hatch hook that turns the runtime carrier into one platform wheel.
+
+The release pipeline stages exactly one executable family plus its required
+ripgrep, PTY, and Office sidecars. This hook validates that closed payload before
+assigning a native wheel tag; it never downloads or selects replacement assets.
+"""
+
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import stat
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+
+logger = logging.getLogger(__name__)
 
 
 def _load_platforms() -> dict[str, tuple[str, str]]:
@@ -36,6 +46,7 @@ _PLATFORMS = _load_platforms()
 
 
 def _host_platform_tag() -> str:
+    """Return the wheel tag corresponding to the current build host."""
     machine = platform.machine().lower()
     arch = "arm64" if machine in {"arm64", "aarch64"} else "x64" if machine in {"x86_64", "amd64"} else machine
     system = platform.system().lower()
@@ -49,16 +60,20 @@ def _host_platform_tag() -> str:
         else system
     )
     try:
-        return _PLATFORMS[key][0]
+        tag = _PLATFORMS[key][0]
     except KeyError as exc:
         raise RuntimeError(f"unsupported deepseek-harness-runtime-bin build platform: {key}") from exc
+    logger.debug("runtime wheel host resolved key=%s tag=%s", key, tag)
+    return tag
 
 
 class RuntimeBuildHook(BuildHookInterface):
     """Assign the native wheel tag and reject incomplete or mixed-platform payloads."""
 
     def initialize(self, version: str, build_data: dict[str, object]) -> None:
+        """Validate one staged carrier and assign its exact native wheel tag."""
         if version == "editable":
+            logger.debug("runtime wheel validation skipped mode=editable")
             return
         if self.target_name == "sdist":
             raise RuntimeError(
@@ -66,6 +81,7 @@ class RuntimeBuildHook(BuildHookInterface):
             )
 
         platform_tag = os.environ.get("DSH_RUNTIME_PLATFORM_TAG") or _host_platform_tag()
+        logger.debug("runtime wheel validating platform=%s", platform_tag)
         matches = [value for value in _PLATFORMS.values() if value[0] == platform_tag]
         if len(matches) != 1:
             supported = ", ".join(value[0] for value in _PLATFORMS.values())
@@ -93,6 +109,7 @@ class RuntimeBuildHook(BuildHookInterface):
             raise RuntimeError(
                 f"runtime wheel {platform_tag} payload must be {expected_files}; found {found_files}"
             )
+        logger.debug("runtime wheel payload matched platform=%s files=%d", platform_tag, len(found_files))
         for executable in runtime_files:
             if executable == office:
                 adapter = office / "node_modules/@deepseek-ai/libreoffice-kit/package.json"
@@ -112,3 +129,4 @@ class RuntimeBuildHook(BuildHookInterface):
         build_data["pure_python"] = False
         build_data["infer_tag"] = False
         build_data["tag"] = f"py3-none-{platform_tag}"
+        logger.debug("runtime wheel tag assigned tag=%s", build_data["tag"])

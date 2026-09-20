@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -142,8 +143,11 @@ def test_runtime_requires_complete_office_sidecar(
 
 
 def test_node_mode_runs_the_deployed_dsh_cli(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.DEBUG, logger="deepseek_harness_runtime")
     bin_js = tmp_path / "runtime" / "node" / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
     bin_js.parent.mkdir(parents=True)
     bin_js.touch()
@@ -151,6 +155,9 @@ def test_node_mode_runs_the_deployed_dsh_cli(
     monkeypatch.setattr(runtime.shutil, "which", lambda _name: "/node")
 
     assert resolve_bundled_launch_args("node") == ("/node", str(bin_js))
+    messages = [record.getMessage() for record in caplog.records]
+    assert "runtime carrier selected mode=node source=argument" in messages
+    assert "runtime node carrier verified" in messages
 
 
 def test_python_dsh_command_requires_explicit_home(
